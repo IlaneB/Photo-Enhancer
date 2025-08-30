@@ -169,15 +169,22 @@
             closeModalBtn.addEventListener('click', () => errorModal.classList.add('hidden'));
 
             // --- Functions ---
-
-            function handleFiles(files) {
+            async function handleFiles(files) {
                 if (files.length === 0) return;
                 
                 for (const file of files) {
-                    if (!file.type.startsWith('image/')) {
-                        showError(`Skipping non-image file: ${file.name}`);
+                    // Added support for PNG files
+                    if (!file.type.startsWith('image/jpeg') && !file.type.startsWith('image/png')) {
+                        showError(`Invalid format. Please upload a JPEG or PNG file.`);
                         continue;
                     }
+
+                    const validationError = await validateImage(file);
+                    if (validationError) {
+                        showError(validationError);
+                        continue;
+                    }
+                    
                     const imageId = `img-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
                     const imageObject = {
                         id: imageId,
@@ -208,6 +215,33 @@
                     switchToEditor();
                 }
             }
+            
+            async function validateImage(file) {
+                 const MIN_WIDTH = 2500;
+                 const MIN_HEIGHT = 1666;
+                 const TARGET_ASPECT_RATIO = 3/2;
+                 const MIN_FILE_SIZE_MB = 2;
+                 const MAX_FILE_SIZE_MB = 15;
+                 
+                 // Check resolution and aspect ratio
+                 return new Promise(resolve => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const aspectRatio = img.width / img.height;
+                        if (img.width < MIN_WIDTH || img.height < MIN_HEIGHT) {
+                            resolve(`Resolution too low: ${img.width}x${img.height}. Minimum is ${MIN_WIDTH}x${MIN_HEIGHT}.`);
+                        } else if (Math.abs(aspectRatio - TARGET_ASPECT_RATIO) > 0.05) { // Allow for small margin of error
+                            resolve(`Aspect ratio is not 3:2. Found ${aspectRatio.toFixed(2)}.`);
+                        } else {
+                            resolve(null); // No error
+                        }
+                    };
+                    img.onerror = () => {
+                        resolve('Failed to read image dimensions.');
+                    };
+                    img.src = URL.createObjectURL(file);
+                 });
+             }
 
             function renderImageCard(imageObject) {
                 const cardHTML = `
@@ -303,7 +337,7 @@
                 let processedCount = 0;
                 const totalToProcess = imageQueue.filter(img => img.status === 'queued').length;
                 
-                if(totalToProcess === 0) {
+                if (totalToProcess === 0) {
                     isProcessing = false;
                     updateButtonStates();
                     return;
@@ -321,7 +355,7 @@
                 
                 isProcessing = false;
                 updateButtonStates();
-                processingStatus.textContent = `Processing complete. ${imageQueue.filter(i=>i.status === 'done').length} images enhanced.`;
+                processingStatus.textContent = `Processing complete. ${imageQueue.filter(i => i.status === 'done').length} images enhanced.`;
             }
 
             async function callEnhanceAPI(imageObject) {
@@ -343,6 +377,8 @@
                     3.  **Remove Harsh Shadows:** Intelligently lighten distracting shadows.
                     4.  **Auto-Crop for Impact:** Crop using the rule of thirds to focus on peak action.
                     5.  **Enhance Colors:** Boost vibrance slightly for pop.
+                    6.  **Keep original format and aspect ratio:** The output image must have the same file format and dimensions as the original.
+                    7.  **Maintain High Quality:** Ensure the output image has a low compression level (quality of 80-90%).
                     Return only the edited image.`;
 
                 const payload = {
@@ -370,10 +406,11 @@
                     const result = await response.json();
                     const generatedPart = result?.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
 
+                    // Check for undefined and block reason here
                     if (!generatedPart) {
-                        const blockReason = result?.promptFeedback?.blockReason;
-                        throw new Error(blockReason ? `Blocked: ${blockReason}` : 'No image data in AI response.');
-                    }
+                         const blockReason = result?.promptFeedback?.blockReason;
+                         throw new Error(blockReason ? `Blocked: ${blockReason}` : 'No image data in AI response.');
+                     }
                     
                     imageObject.enhancedDataURL = `data:${generatedPart.inlineData.mimeType};base64,${generatedPart.inlineData.data}`;
                     imageObject.status = 'done';
@@ -385,6 +422,24 @@
                 } finally {
                     updateButtonStates();
                 }
+            }
+            
+            // Re-exports the image from a canvas with specified quality to increase file size.
+            async function recompressImage(dataURL) {
+                return new Promise(resolve => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0);
+                        // Re-export as a JPEG with a quality of 0.9 (90%)
+                        const recompressedDataURL = canvas.toDataURL('image/jpeg', 0.9);
+                        resolve(recompressedDataURL);
+                    };
+                    img.src = dataURL;
+                });
             }
 
             async function fetchWithRetry(url, options, retries = 3, delay = 1000) {
@@ -400,14 +455,17 @@
                 }
             }
             
-            function downloadSingleImage(imageObject) {
+            async function downloadSingleImage(imageObject) {
                  if(imageObject.status !== 'done' || !imageObject.enhancedDataURL) return;
+
+                 // Recompress the image to meet quality/size guidelines
+                 const finalDataURL = await recompressImage(imageObject.enhancedDataURL);
+
                  const link = document.createElement('a');
-                 link.href = imageObject.enhancedDataURL;
+                 link.href = finalDataURL;
                  const nameParts = imageObject.file.name.split('.');
-                 const extension = nameParts.pop();
-                 const name = nameParts.join('.');
-                 link.download = `${name}-enhanced.${extension}`;
+                 const name = nameParts.slice(0, -1).join('.');
+                 link.download = `${name}-enhanced.jpg`; // Ensure format is JPEG
                  document.body.appendChild(link);
                  link.click();
                  document.body.removeChild(link);
@@ -422,11 +480,13 @@
 
                 const zip = new JSZip();
                 for(const imageObject of completedImages) {
-                    const base64Data = imageObject.enhancedDataURL.split(',')[1];
+                    // Recompress the image to meet quality/size guidelines
+                    const finalDataURL = await recompressImage(imageObject.enhancedDataURL);
+
+                    const base64Data = finalDataURL.split(',')[1];
                     const nameParts = imageObject.file.name.split('.');
-                    const extension = nameParts.pop();
-                    const name = nameParts.join('.');
-                    const filename = `${name}-enhanced.${extension}`;
+                    const name = nameParts.slice(0, -1).join('.');
+                    const filename = `${name}-enhanced.jpg`;
                     zip.file(filename, base64Data, { base64: true });
                 }
 
