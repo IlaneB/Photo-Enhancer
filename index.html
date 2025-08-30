@@ -110,8 +110,8 @@
                         <div>
                             <label for="output-aspect" class="block text-sm font-medium text-gray-400">Aspect Ratio</label>
                             <select id="output-aspect" class="mt-1 block w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-white">
+                                <option value="3:2" selected>3:2 (Default)</option>
                                 <option value="original">Original</option>
-                                <option value="3:2">3:2 (Default)</option>
                                 <option value="16:9">16:9 (Widescreen)</option>
                                 <option value="1:1">1:1 (Square)</option>
                             </select>
@@ -268,8 +268,8 @@
                             img.onload = () => {
                                 currentImageWidth = img.width;
                                 currentImageHeight = img.height;
-                                outputWidthInput.value = img.width;
-                                outputHeightInput.value = img.height;
+                                outputWidthInput.value = 2500; // Set default width
+                                outputHeightInput.value = 1666; // Set default height
                             };
                             img.src = imageObject.originalDataURL;
                         }
@@ -513,7 +513,6 @@
                     img.src = dataURL;
                 });
             }
-
 
             async function fetchWithRetry(url, options, retries = 3, delay = 1000) {
                 for (let i = 0; i < retries; i++) {
